@@ -1,0 +1,15 @@
+# /etc/systemd/system/radiostream-pulseaudio.service
+# Creates a PulseAudio null sink for capturing Spotify audio
+
+[Unit]
+Description=PulseAudio null sink for RadioStream
+After=pulseaudio.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/pactl load-module module-null-sink sink_name=spotify_out sink_properties=device.description="SpotifyCapture"
+ExecStop=/usr/bin/pactl unload-module module-null-sink
+
+[Install]
+WantedBy=multi-user.target

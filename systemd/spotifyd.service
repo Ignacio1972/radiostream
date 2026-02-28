@@ -1,0 +1,16 @@
+# /etc/systemd/system/spotifyd.service
+
+[Unit]
+Description=Spotifyd for RadioStream
+After=radiostream-pulseaudio.service
+Requires=radiostream-pulseaudio.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/spotifyd --no-daemon --config-path /etc/spotifyd.conf
+Restart=always
+RestartSec=5
+Environment=PULSE_SINK=spotify_out
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+# /etc/systemd/system/radiostream-ffmpeg.service
+# Captures PulseAudio output and streams to Icecast
+
+[Unit]
+Description=FFmpeg audio capture for RadioStream
+After=radiostream-pulseaudio.service icecast2.service
+Requires=radiostream-pulseaudio.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ffmpeg -f pulse -i spotify_out.monitor -acodec libmp3lame -ab 192k -ar 44100 -content_type audio/mpeg -f mp3 icecast://source:hackme@127.0.0.1:8000/isla
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

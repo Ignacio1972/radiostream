@@ -1,0 +1,13 @@
+# /etc/spotifyd.conf
+# spotifyd configuration for RadioStream
+# Install: apt install spotifyd OR cargo install spotifyd
+
+[global]
+username = "radioislanegra"
+# password set via SPOTIFY_PASSWORD env var or use password_cmd
+backend = "pulseaudio"
+device_name = "RadioStream"
+bitrate = 320
+volume_normalisation = true
+normalisation_pregain = -10
+device_type = "computer"
