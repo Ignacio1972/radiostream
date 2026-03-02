@@ -22,7 +22,10 @@ function RemoteControl() {
     previous,
     seek,
     toggleShuffle,
-    toggleRepeat
+    toggleRepeat,
+    kickstart,
+    socket,
+    pulseVolume
   } = useSpotify();
 
   if (loading) {
@@ -31,17 +34,6 @@ function RemoteControl() {
         <div className="flex flex-col items-center gap-4">
           <span className="loading loading-spinner loading-lg text-primary"></span>
           <p className="text-base-content/60">Connecting to Radio Isla Negra...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen bg-base-100 flex items-center justify-center p-4">
-        <div className="flex flex-col items-center gap-4">
-          <span className="loading loading-spinner loading-lg text-success"></span>
-          <p className="text-success">Stand by</p>
         </div>
       </div>
     );
@@ -60,6 +52,24 @@ function RemoteControl() {
 
       <div className="card bg-base-200/80 backdrop-blur-xl shadow-2xl max-w-md w-full relative z-10">
         <div className="card-body p-4 pb-8">
+          {error && !currentTrack && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <p className="text-base-content/60 text-sm">Sin reproducción activa</p>
+              <button className="btn btn-primary btn-lg gap-2" onClick={kickstart}>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
+                  <path fillRule="evenodd" d="M4.5 5.653c0-1.427 1.529-2.33 2.779-1.643l11.54 6.347c1.295.712 1.295 2.573 0 3.286L7.28 19.99c-1.25.687-2.779-.217-2.779-1.643V5.653Z" clipRule="evenodd" />
+                </svg>
+                Iniciar Radio
+              </button>
+            </div>
+          )}
+
+          {error && currentTrack && (
+            <div className="alert alert-warning py-2 px-3 mb-3">
+              <span className="text-sm">Stand by...</span>
+            </div>
+          )}
+
           <TrackInfo track={currentTrack} isPlaying={isPlaying} />
 
           <ProgressBar
@@ -84,7 +94,7 @@ function RemoteControl() {
           />
 
           <div className="mt-6">
-            <VolumeControl initialVolume={currentTrack?.device?.volume_percent} />
+            <VolumeControl socket={socket} initialVolume={pulseVolume} />
           </div>
 
           <div className="flex justify-center mt-8">

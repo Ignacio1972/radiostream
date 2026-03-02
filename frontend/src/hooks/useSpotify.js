@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useWebSocket } from './useWebSocket';
 import api from '../services/api';
 
@@ -9,6 +9,8 @@ export function useSpotify() {
   const [repeat, setRepeat] = useState('off');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [pulseVolume, setPulseVolume] = useState(null);
+  const consecutiveErrors = useRef(0);
 
   const { socket, isConnected: wsConnected, isReconnecting: wsReconnecting } = useWebSocket();
 
@@ -16,15 +18,23 @@ export function useSpotify() {
     try {
       const response = await api.get('/api/playback/current');
       const data = response.data;
+      console.log('[useSpotify] poll:', data ? `playing=${data.is_playing}, track=${data.name}` : 'null (D-Bus disconnected)');
       if (data) {
         setCurrentTrack(data);
         setIsPlaying(data.is_playing || false);
         setShuffle(data.shuffle_state || false);
         setRepeat(data.repeat_state || 'off');
+      } else {
+        setIsPlaying(false);
       }
+      consecutiveErrors.current = 0;
       setError(null);
     } catch (err) {
-      setError(err.message);
+      consecutiveErrors.current++;
+      console.warn(`[useSpotify] poll error #${consecutiveErrors.current}:`, err.message);
+      if (consecutiveErrors.current >= 3) {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -35,13 +45,17 @@ export function useSpotify() {
     if (!socket) return;
 
     socket.on('state-update', (data) => {
+      console.log('[useSpotify] state-update via Socket.IO:', data ? `playing=${data.is_playing}, track=${data.name}` : 'null (disconnected)');
       if (data) {
         setCurrentTrack(data);
         setIsPlaying(data.is_playing || false);
         setShuffle(data.shuffle_state || false);
         setRepeat(data.repeat_state || 'off');
-        setLoading(false);
+      } else {
+        // D-Bus disconnected — spotifyd lost session
+        setIsPlaying(false);
       }
+      setLoading(false);
     });
 
     return () => {
@@ -56,30 +70,53 @@ export function useSpotify() {
     return () => clearInterval(interval);
   }, [fetchCurrentTrack]);
 
+  // Fetch PulseAudio volume on mount
+  useEffect(() => {
+    api.get('/api/playback/volume').then(res => {
+      setPulseVolume(res.data.volume);
+    }).catch(() => {});
+  }, []);
+
   const withErrorHandling = async (fn) => {
     try {
-      return await fn();
+      const result = await fn();
+      setError(null);
+      return result;
     } catch (err) {
-      setError(err.response?.data?.error || err.message);
-      throw err;
+      const msg = err.response?.data?.error || err.message;
+      console.error('[useSpotify] Action error:', msg);
+      // Don't set error state for transient failures — let the UI stay usable
+      // Error state is only set by fetchCurrentTrack for persistent issues
     }
   };
 
   const play = () => withErrorHandling(async () => {
-    await api.post('/api/playback/play');
+    console.log('[useSpotify] action: play');
     setIsPlaying(true);
+    await api.post('/api/playback/play');
+    await fetchCurrentTrack();
+  });
+
+  const kickstart = () => withErrorHandling(async () => {
+    console.log('[useSpotify] action: kickstart');
+    await api.post('/api/playback/kickstart');
+    // Wait for spotifyd to start playing and register MPRIS
+    setTimeout(fetchCurrentTrack, 3000);
   });
 
   const pause = () => withErrorHandling(async () => {
+    console.log('[useSpotify] action: pause');
     await api.post('/api/playback/pause');
     setIsPlaying(false);
   });
 
   const next = () => withErrorHandling(async () => {
+    console.log('[useSpotify] action: next');
     await api.post('/api/playback/next');
   });
 
   const previous = () => withErrorHandling(async () => {
+    console.log('[useSpotify] action: previous');
     await api.post('/api/playback/previous');
   });
 
@@ -117,6 +154,9 @@ export function useSpotify() {
     previous,
     seek,
     toggleShuffle,
-    toggleRepeat
+    toggleRepeat,
+    kickstart,
+    socket,
+    pulseVolume
   };
 }

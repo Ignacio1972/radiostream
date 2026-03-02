@@ -8,7 +8,15 @@ Requires=radiostream-pulseaudio.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/ffmpeg -f pulse -i spotify_out.monitor -acodec libmp3lame -ab 192k -ar 44100 -content_type audio/mpeg -f mp3 icecast://source:hackme@127.0.0.1:8000/isla
+ExecStart=/usr/bin/ffmpeg \
+  -fflags nobuffer \
+  -flags low_delay \
+  -f pulse -i spotify_out.monitor \
+  -acodec aac -ab 192k -ar 44100 \
+  -flush_packets 1 \
+  -frag_duration 100000 \
+  -content_type audio/aac \
+  -f adts icecast://source:hackme@127.0.0.1:8000/isla
 Restart=always
 RestartSec=5
 

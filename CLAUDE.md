@@ -3,30 +3,54 @@
 ## What is this?
 Web app that streams a Spotify-powered internet radio station via Icecast. Two interfaces:
 - `/player` — Public web player (listen to Icecast stream + see current track)
-- `/remote` — Spotify remote control (play/pause/next/prev/seek/shuffle/repeat/like/volume)
+- `/remote` — Spotify remote control (play/pause/next/prev/seek/shuffle/repeat/volume)
 - `/` redirects to `/player`
 
 ## Architecture
 
 ### Audio pipeline
 ```
-Spotify → spotifyd → PulseAudio (null sink: spotify_out) → ffmpeg (MP3) → Icecast (/isla) → listener
+Spotify → spotifyd → PulseAudio (null sink: spotify_out) → ffmpeg (AAC 192kbps) → Icecast (/isla) → listener
 ```
-- **spotifyd**: Spotify Connect client, outputs to PulseAudio sink `spotify_out`
-- **ffmpeg**: Captures `spotify_out.monitor`, encodes MP3, pushes to Icecast
-- **Icecast**: Serves stream at mount `/isla` (port 8000, `audio/mpeg`)
+- **spotifyd**: Spotify Connect client, outputs to PulseAudio sink `spotify_out`, D-Bus/MPRIS on system bus
+- **ffmpeg**: Captures `spotify_out.monitor`, encodes AAC 192kbps 44100Hz, pushes to Icecast via ADTS
+- **Icecast**: Serves stream at mount `/isla` (port 8000, `audio/aac`)
 - Systemd services in `systemd/` directory
 
+### Playback control (D-Bus/MPRIS + Spotify Web API)
+Day-to-day playback control and metadata comes from spotifyd's MPRIS interface on the D-Bus system bus.
+No rate limit concerns for play/pause/next/prev/seek/volume/shuffle/repeat — all via D-Bus.
+- spotifyd registers as `org.mpris.MediaPlayer2.spotifyd.instance<PID>` (dynamic name discovery)
+- D-Bus policy file: `/etc/dbus-1/system.d/spotifyd.conf`
+- spotifyd config: `/etc/spotifyd.conf` (`dbus_type = "system"`)
+- MPRIS only registers when spotifyd has active playback
+- Backend auto-reconnects to D-Bus every 5s if disconnected
+
+### Spotify Web API (minimal usage)
+Used **only** for two things — starting playback and keeping the token alive.
+Be very conservative with API calls to avoid rate limits.
+- `backend/scripts/spotify-kickstart.sh` — Starts playback on RadioStream device (2 API calls: refresh token + play)
+- `backend/scripts/spotify-token-refresh.sh` — Refreshes access token (1 API call)
+- Cron job: token refresh every 50 minutes (`*/50 * * * *`)
+- Credentials: `.env` file (CLIENT_ID, CLIENT_SECRET), refresh token in scripts
+- Token cache: `/var/cache/spotifyd/spotify-api-token.json`
+
+### spotifyd authentication
+- spotifyd 0.4.2 uses OAuth only (no username/password support)
+- OAuth tokens expire (~1 hour) and get revoked after prolonged inactivity
+- To re-authenticate: `spotifyd authenticate --oauth-port 5588 --cache-path /var/cache/spotifyd`
+  - Port 5588 because 8000 is used by Icecast
+  - Open the URL in browser, authorize, copy redirect URL, curl it from the server
+- OAuth credentials cached at `/var/cache/spotifyd/oauth/credentials.json`
+
 ### Backend (Node.js/Express, port 4001)
-- `backend/server.js` — Express + Socket.IO setup, SPA fallback
-- `backend/routes/playback.js` — Spotify playback API (play/pause/next/prev/seek/shuffle/repeat/like/volume)
+- `backend/server.js` — Express + Socket.IO + D-Bus event bridge
+- `backend/routes/playback.js` — Playback API via D-Bus (play/pause/next/prev/seek/shuffle/repeat/volume)
 - `backend/routes/stream.js` — Icecast stream info and status
-- `backend/routes/auth.js` — Spotify OAuth flow
-- `backend/services/spotifyAPI.js` — Spotify Web API wrapper
-- `backend/services/tokenStorage.js` — Persists tokens to `backend/data/spotify-tokens.json`
-- `backend/services/deviceManager.js` — Manages spotifyd device
-- `backend/middleware/auth.js` — Auth middleware
+- `backend/services/dbusPlayer.js` — D-Bus/MPRIS singleton (replaces all Spotify Web API services)
 - `backend/middleware/errorHandler.js` — Error handler
+- `backend/scripts/spotify-kickstart.sh` — Start playback via Spotify Web API (when D-Bus can't)
+- `backend/scripts/spotify-token-refresh.sh` — Cron script to keep API token alive
 
 ### Frontend (React 18 + Vite + Tailwind 4 + DaisyUI 5)
 - `frontend/src/App.jsx` — React Router setup (BrowserRouter)
@@ -35,10 +59,10 @@ Spotify → spotifyd → PulseAudio (null sink: spotify_out) → ffmpeg (MP3) �
 - `frontend/src/components/TrackInfo.jsx` — Album art + track name/artist
 - `frontend/src/components/Controls.jsx` — Play/pause/next/prev buttons
 - `frontend/src/components/ProgressBar.jsx` — Seek bar
-- `frontend/src/components/ExtraControls.jsx` — Shuffle/like/repeat
+- `frontend/src/components/ExtraControls.jsx` — Shuffle/repeat toggles
 - `frontend/src/components/VolumeControl.jsx` — Spotify device volume
 - `frontend/src/components/ConnectionStatus.jsx` — WebSocket status indicator
-- `frontend/src/hooks/useSpotify.js` — Spotify state + actions hook (WebSocket + polling, used by RemoteControl)
+- `frontend/src/hooks/useSpotify.js` — Spotify state + actions hook (Socket.IO push + 30s polling fallback)
 - `frontend/src/hooks/useTrackPolling.js` — Lightweight polling hook for track info (used by WebPlayer)
 - `frontend/src/hooks/useWebSocket.js` — Socket.IO connection hook
 - `frontend/src/services/api.js` — Axios instance
@@ -63,6 +87,24 @@ pm2 restart radiostream         # Restart production
 
 # Stream services
 systemctl status spotifyd radiostream-ffmpeg radiostream-pulseaudio
+
+# Start playback (when nothing is playing)
+/var/www/radiostream/backend/scripts/spotify-kickstart.sh
+/var/www/radiostream/backend/scripts/spotify-kickstart.sh spotify:playlist:XXXXX  # specific playlist
+
+# Re-authenticate spotifyd (when OAuth token expires)
+systemctl stop spotifyd
+spotifyd authenticate --oauth-port 5588 --cache-path /var/cache/spotifyd --config-path /etc/spotifyd.conf
+# → Open URL in browser, authorize, copy redirect URL, then:
+# curl "http://127.0.0.1:5588/login?code=XXXXX..."
+systemctl start spotifyd
+
+# D-Bus debugging
+dbus-send --system --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames
+journalctl -u spotifyd -n 20
+
+# Check token refresh cron
+cat /var/log/spotify-refresh.log
 ```
 
 ## Key conventions

@@ -77,6 +77,15 @@ io.on('connection', (socket) => {
   socket.on('ping', (callback) => {
     if (callback) callback('pong');
   });
+
+  socket.on('volume-change', (volumePercent) => {
+    const vol = Math.max(0, Math.min(100, Math.round(volumePercent)));
+    const { execFile } = require('child_process');
+    execFile('pactl', ['set-sink-volume', 'spotify_out', `${vol}%`], (err) => {
+      if (err) console.error('[Volume] pactl error:', err.message);
+    });
+    io.to('radiostream').emit('volume-update', vol);
+  });
 });
 
 // D-Bus events → Socket.IO broadcast
